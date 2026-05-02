@@ -1,77 +1,94 @@
-# GVHMR: World-Grounded Human Motion Recovery via Gravity-View Coordinates
-### [Project Page](https://zju3dv.github.io/gvhmr) | [Paper](https://arxiv.org/abs/2409.06662)
+# neuro-video-dx
 
-> World-Grounded Human Motion Recovery via Gravity-View Coordinates  
-> [Zehong Shen](https://zehongs.github.io/)<sup>\*</sup>,
-[Huaijin Pi](https://phj128.github.io/)<sup>\*</sup>,
-[Yan Xia](https://isshikihugh.github.io/scholar),
-[Zhi Cen](https://scholar.google.com/citations?user=Xyy-uFMAAAAJ),
-[Sida Peng](https://pengsida.net/)<sup>†</sup>,
-[Zechen Hu](https://zju3dv.github.io/gvhmr),
-[Hujun Bao](http://www.cad.zju.edu.cn/home/bao/),
-[Ruizhen Hu](https://csse.szu.edu.cn/staff/ruizhenhu/),
-[Xiaowei Zhou](https://xzhou.me/)  
-> SIGGRAPH Asia 2024
-
-<p align="center">
-    <img src=docs/example_video/project_teaser.gif alt="animated" />
-</p>
-
-## News 🔥
-
-- [2025-03-08] By default not using DPVO. We implemented a SimpleVO, which is more efficient and compatible with GVHMR.
-- [2025-03-08] We added a new option `f_mm` to specify the focal length of the fullframe camera in mm.
+Multi-person human motion recovery from video using [GVHMR](https://zju3dv.github.io/gvhmr). Handles scene cuts, moving cameras, and multiple people per video.
 
 ## Setup
 
-Please see [installation](docs/INSTALL.md) for details.
+**1. Clone and create environment**
 
-## Quick Start
+```bash
+git clone https://github.com/omrastogi/neuro-video-dx.git
+cd neuro-video-dx
 
-### [<img src="https://i.imgur.com/QCojoJk.png" width="30"> Google Colab demo for GVHMR](https://colab.research.google.com/drive/1N9WSchizHv2bfQqkE9Wuiegw_OT7mtGj?usp=sharing)
-
-### [<img src="https://s2.loli.net/2024/09/15/aw3rElfQAsOkNCn.png" width="20"> HuggingFace demo for GVHMR](https://huggingface.co/spaces/LittleFrog/GVHMR)
-
-### Demo
-Demo entries are provided in `tools/demo`. Use `-s` to skip visual odometry if you know the camera is static, otherwise the camera will be estimated by DPVO.
-We also provide a script `demo_folder.py` to inference a entire folder.
-```shell
-python tools/demo/demo.py --video=docs/example_video/tennis.mp4 -s
-python tools/demo/demo_folder.py -f inputs/demo/folder_in -d outputs/demo/folder_out -s
+conda create -y -n gvhmr python=3.10
+conda activate gvhmr
+pip install -r requirements.txt
+pip install -e .
 ```
 
-### Reproduce
-1. **Test**:
-To reproduce the 3DPW, RICH, and EMDB results in a single run, use the following command:
-    ```shell
-    python tools/train.py global/task=gvhmr/test_3dpw_emdb_rich exp=gvhmr/mixed/mixed ckpt_path=inputs/checkpoints/gvhmr/gvhmr_siga24_release.ckpt
-    ```
-    To test individual datasets, change `global/task` to `gvhmr/test_3dpw`, `gvhmr/test_rich`, or `gvhmr/test_emdb`.
+**2. Download checkpoints**
 
-2. **Train**:
-To train the model, use the following command:
-    ```shell
-    # The gvhmr_siga24_release.ckpt is trained with 2x4090 for 420 epochs, note that different GPU settings may lead to different results.
-    python tools/train.py exp=gvhmr/mixed/mixed
-    ```
-    During training, note that we do not employ post-processing as in the test script, so the global metrics results will differ (but should still be good for comparison with baseline methods).
+All weights are pulled from HuggingFace — no manual sign-ups required:
 
-# Citation
-
-If you find this code useful for your research, please use the following BibTeX entry.
-
-```
-@inproceedings{shen2024gvhmr,
-  title={World-Grounded Human Motion Recovery via Gravity-View Coordinates},
-  author={Shen, Zehong and Pi, Huaijin and Xia, Yan and Cen, Zhi and Peng, Sida and Hu, Zechen and Bao, Hujun and Hu, Ruizhen and Zhou, Xiaowei},
-  booktitle={SIGGRAPH Asia Conference Proceedings},
-  year={2024}
-}
+```bash
+bash dnwd_ckpt.sh
 ```
 
-# Acknowledgement
+This downloads into `inputs/checkpoints/`:
 
-We thank the authors of
-[WHAM](https://github.com/yohanshin/WHAM),
-[4D-Humans](https://github.com/shubham-goel/4D-Humans),
-and [ViTPose-Pytorch](https://github.com/gpastal24/ViTPose-Pytorch) for their great works, without which our project/code would not be possible.
+```
+inputs/checkpoints/
+├── gvhmr/gvhmr_siga24_release.ckpt
+├── hmr2/epoch=10-step=25000.ckpt
+├── vitpose/vitpose-h-multi-coco.pth
+├── dpvo/dpvo.pth
+├── yolo/yolov8x.pt
+└── body_models/
+    ├── smpl/SMPL_NEUTRAL.pkl
+    └── smplx/SMPLX_NEUTRAL.npz
+```
+
+**3. (Optional) Install scenedetect**
+
+For automatic scene-cut detection:
+
+```bash
+pip install scenedetect[opencv]
+```
+
+## Running inference
+
+Place your video in the `data/` folder, then run `demo.py`.
+
+**Basic usage (moving camera):**
+```bash
+python demo.py --video data/your_video.mp4
+```
+
+**Static camera (skip visual odometry):**
+```bash
+python demo.py --video data/your_video.mp4 -s
+```
+
+**Disable scene detection:**
+```bash
+python demo.py --video data/your_video.mp4 --no_scene_detect
+```
+
+**All options:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--video` | required | Path to input video |
+| `-s / --static_cam` | off | Skip visual odometry for static cameras |
+| `--output_root` | `outputs/demo` | Root directory for results |
+| `--min_track_len` | 15 | Minimum frames for a person track to be kept |
+| `--f_mm` | auto | Camera focal length in mm (full-frame equivalent) |
+| `--scene_threshold` | 27.0 | Sensitivity for scene cut detection |
+| `--min_scene_len` | 30 | Minimum frames per scene segment |
+| `--no_scene_detect` | off | Treat the whole video as one scene |
+
+## Output structure
+
+Results are saved as `.pt` files per person, per scene:
+
+```
+outputs/demo/<video_name>/
+├── person_<id>/
+│   ├── hmr4d_results.pt   # SMPLX params + global motion
+│   ├── bbx.pt
+│   ├── vitpose.pt
+│   └── vit_features.pt
+└── (multi-scene videos)
+    └── scene_000/person_<id>/...
+```
