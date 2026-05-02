@@ -2,9 +2,22 @@
 .hydra
 inputs
 outputs
+data/
+.claude/
+
+# Large media files
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Model checkpoints and weights
+*.ckpt
+*.bin
+*.safetensors
 
 # All file or folders start with tmp will be ignored
-tmp*  
+tmp*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -177,3 +190,5 @@ tensorboard
 
 # glove
 glove
+data/
+docs/
