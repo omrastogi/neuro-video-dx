@@ -3,17 +3,8 @@ Qwen3-VL inference test using the same clinical prompts as inference_gemeni.py.
 
 Usage:
     python -m qwen.test_inference
-    python -m qwen.test_inference --model 8b-thinking --video_type mesh --samples 3
-    python -m qwen.test_inference --model 30b-thinking --video_type keypoints --samples 5
-
-Notes on Instruct vs Thinking:
-    - Instruct variants answer directly. We use the Qwen-recommended sampling
-      params (temp 0.7, top_p 0.8, top_k 20, presence_penalty 1.5).
-    - Thinking variants emit a <think>...</think> trace before the answer.
-      They MUST NOT use greedy decoding (it causes repetition loops); we use
-      the Qwen-recommended params (temp 1.0, top_p 0.95, top_k 20).
-    Whether a run is "thinking" is derived from the chosen model, not a flag,
-    so the sampling config can never drift out of sync with the checkpoint.
+    python -m qwen.test_inference --video_type mesh --samples 3
+    python -m qwen.test_inference --video_type keypoints --thinking --samples 5
 """
 import argparse
 import json
@@ -28,38 +19,8 @@ from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 from qwen.dataset import NeuroDxVideoDataset, build_qwen_messages
 from qwen.prompts import SYSTEM_PROMPT, build_user_prompt
 
-MODELS = {
-    "8b":           "Qwen/Qwen3-VL-8B-Instruct",
-    "8b-thinking":  "Qwen/Qwen3-VL-8B-Thinking",
-    "30b":          "Qwen/Qwen3-VL-30B-A3B-Instruct",
-    "30b-thinking": "Qwen/Qwen3-VL-30B-A3B-Thinking",
-    "32b":          "Qwen/Qwen3-VL-32B-Instruct",
-    "32b-thinking": "Qwen/Qwen3-VL-32B-Thinking",
-}
-DEFAULT_MODEL = "8b"
+DEFAULT_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
 RESULTS_DIR = Path("results")
-
-# Qwen-recommended sampling configs (from the official model cards / repo).
-SAMPLING = {
-    "instruct": dict(
-        do_sample=True,
-        temperature=0.7,
-        top_p=0.8,
-        top_k=20,
-        repetition_penalty=1.0,
-    ),
-    "thinking": dict(
-        do_sample=True,
-        temperature=1.0,
-        top_p=0.95,
-        top_k=20,
-        repetition_penalty=1.0,
-    ),
-}
-
-
-def is_thinking_model(model_id: str) -> bool:
-    return "thinking" in model_id.lower()
 
 
 def extract_json(text: str):
@@ -111,15 +72,12 @@ def run_inference(model, processor, messages: list[dict], thinking: bool) -> tup
         return_tensors="pt",
     ).to(model.device)
 
-    # Thinking traces need a much larger budget; the answer is appended after them.
-    max_new_tokens = 8192 if thinking else 2048
-    gen_kwargs = SAMPLING["thinking" if thinking else "instruct"]
-
+    max_new_tokens = 4096 if thinking else 2048
     with torch.no_grad():
         output_ids = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            **gen_kwargs,
+            do_sample=False,
         )
 
     generated = output_ids[0][inputs.input_ids.shape[1]:]
@@ -131,10 +89,7 @@ def run_inference(model, processor, messages: list[dict], thinking: bool) -> tup
         think_end = full_text.index("</think>")
         think_content = full_text[think_start:think_end].strip()
         response = full_text[think_end + len("</think>"):].strip()
-        # Strip any trailing special tokens left after skip_special_tokens=False.
-        response = re.sub(r"<\|[^|]*\|>", "", response).strip()
     else:
-        # No think block (Instruct model, or Thinking model that didn't emit one).
         response = processor.decode(generated, skip_special_tokens=True).strip()
 
     return response, think_content
@@ -142,11 +97,11 @@ def run_inference(model, processor, messages: list[dict], thinking: bool) -> tup
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default=DEFAULT_MODEL, choices=list(MODELS),
-                        help="Model shorthand: " + ", ".join(f"{k}={v}" for k, v in MODELS.items()))
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--video_type", default="clip",
                         choices=["clip", "mesh", "keypoints", "mesh_multiview"])
     parser.add_argument("--samples", type=int, default=3)
+    parser.add_argument("--thinking", action="store_true")
     parser.add_argument("--fps", type=float, default=None)
     parser.add_argument("--max_frames", type=int, default=64)
     parser.add_argument("--save", action="store_true", help="Save results to results/")
@@ -155,12 +110,7 @@ def main():
     if args.save:
         RESULTS_DIR.mkdir(exist_ok=True)
 
-    model_id = MODELS[args.model]
-    thinking = is_thinking_model(model_id)
-    print(f"Mode: {'THINKING' if thinking else 'INSTRUCT'}  "
-          f"(sampling: {SAMPLING['thinking' if thinking else 'instruct']})")
-
-    model, processor = load_model(model_id)
+    model, processor = load_model(args.model)
     user_prompt = build_user_prompt(args.video_type)
 
     ds = NeuroDxVideoDataset("data/final", video_type=args.video_type)
@@ -182,7 +132,7 @@ def main():
         selected_fps = messages[-1]["content"][0]["fps"]
         print(f"  FPS   : {selected_fps:.2f}\n")
 
-        response, think = run_inference(model, processor, messages, thinking=thinking)
+        response, think = run_inference(model, processor, messages, thinking=args.thinking)
         parsed, parse_err = extract_json(response)
 
         if think:
@@ -244,14 +194,11 @@ def main():
 
         if args.save:
             clip_id = sample["sample_id"]
-            out = RESULTS_DIR / f"{clip_id}__{args.video_type}__{args.model}.json"
+            out = RESULTS_DIR / f"{clip_id}__{args.video_type}.json"
             out.write_text(json.dumps({
                 "sample_id": sample["sample_id"],
                 "label": sample["label_name"],
                 "video_type": args.video_type,
-                "model": model_id,
-                "thinking": thinking,
-                "think_trace": think,
                 "full_response": response,
                 "parsed_json": parsed,
                 "parse_error": parse_err,
@@ -269,7 +216,7 @@ def main():
         print(f"\nAccuracy: {n_correct}/{len(df)} correct")
 
     if args.save and not df.empty:
-        csv_out = RESULTS_DIR / f"summary__{args.video_type}__{args.model}.csv"
+        csv_out = RESULTS_DIR / f"summary__{args.video_type}.csv"
         df.to_csv(csv_out, index=False)
         print(f"Summary saved: {csv_out}")
 
